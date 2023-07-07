@@ -1,187 +1,130 @@
 import cv2
 import numpy as np
-from utils import split_boxes, is_checked
+from utils import split_boxes, is_checked, get_correct_answers, get_boxes_contours, get_boxes, get_user_answers_by_image
 import os
 import const
+import csv
+import imghdr
 
+class ClassScore:
+    def __init__(self, test_path, key_path) -> None:
+        self.__test_path = test_path
+        self.__key_path = key_path
+        self.test_image = cv2.imread(self.__test_path)
+        self.key_image = cv2.imread(self.__key_path)
+    
+    
+    def score(self, user_answers: list, correct_answers: list) -> float:
+        question_number = min(len(user_answers), len(correct_answers)) ## Check the same size
+        user_answers = user_answers[:question_number]
+        correct_answers = correct_answers[:question_number]
 
-def get_boxes_contours(gray_image):
+        tp = sum(1 for x, y in zip(user_answers, correct_answers) if x == y)
 
-    gray_blur = cv2.GaussianBlur(gray_image, (31, 31), 0) #Noise removal
-    thresh = cv2.adaptiveThreshold(gray_blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 1)
+        return tp / question_number * 100
 
-    kernel = np.ones((5, 5), np.uint8)
-    closing = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+    
+    def representation(self, test_image, key_image):
+        cells = get_boxes(test_image)
+        correct_answers = get_correct_answers(key_image)
+
+    
+        user_answers = get_user_answers_by_image(cells)
+        question_number = min(len(user_answers), len(correct_answers))
+
+        image = test_image.copy()
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        inner_rectangles = get_boxes_contours(gray)
+
+        for qn in range(question_number):
+            box_number = qn // const.NUMBER_OF_QUESTION_IN_BOX
+            row_number = qn % const.NUMBER_OF_QUESTION_IN_BOX
+
+            x, y, _, _ = inner_rectangles[box_number]
             
-    contours, hierarchy = cv2.findContours(closing, cv2.RETR_TREE,
-                                        cv2.CHAIN_APPROX_SIMPLE)
+            color = (0, 0, 255) if user_answers[qn] != correct_answers[qn] else (0, 255, 0) # red for wrong answers and green for correct
+            t_x, t_y = x + 50 + 38 * correct_answers[qn] , y + 20 + 29 * row_number 
 
-    ## get the inner rectangle (second layers) 
-    inner_rectangles = []
+            cv2.ellipse(image, (t_x, t_y), (17,10), 0, 0 , 360, color, -1)
 
-    for i, contour in enumerate(contours):
-        # Check if the contour has a parent and child contours (second layer)
-        if hierarchy[0, i, 3] != -1 and hierarchy[0, i, 2] != -1:
-            area = cv2.contourArea(contour) 
+        image = cv2.resize(image, (800, 800))
+        cv2.imshow("result_image", image)
+        cv2.waitKey(0)
 
-            if area > 60000 or area < 44000: # Check the area of contours
-                continue
+    def save_status(self):
+        cells = get_boxes(self.test_image)
+        user_answers = get_user_answers_by_image(cells)
+        correct_answers = get_correct_answers(self.key_image)
 
-            x, y, w, h = cv2.boundingRect(contour)
+        with open(self.__test_path+'.csv', 'w', newline='') as file:
+            writer = csv.writer(file)
+            for i, answer in enumerate(correct_answers):
+                if user_answers[i] == const.UNANSWERED_CHOICE:
+                    data = [i+1, '-']
+                elif user_answers[i] == answer:
+                    data = [i+1, 'True']
+                else:
+                    data = [i+1, 'False']
 
-            # Store the bounding rectangle coordinates
-            inner_rectangles.append((x, y, w, h))
+                writer.writerow(data)
 
+    @staticmethod
+    def save_all_status(test_dir_path, key_path):
+        key_image = cv2.imread(key_path)
 
-    inner_rectangles = sorted(inner_rectangles, key=lambda x: (round(x[0]/300), x[1])) # sort by (x,y) 
-    return inner_rectangles
-    
-def get_boxes(img, number_of_boxes=17):
-    image = img.copy()
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-    inner_rectangles = get_boxes_contours(gray)
-
-    if number_of_boxes > len(inner_rectangles):
-        raise ValueError("The number of questions are too much.")
-
-    inner_rectangles = inner_rectangles[ : number_of_boxes]
-    boxes = []
-    for x, y, w, h in inner_rectangles: ## each rectangle has 10 questions.
-
-        ioa_image = gray.copy()[y: y+h, x:x+w]
+        correct_answers = get_correct_answers(key_image)
         
-        thresh = cv2.threshold(ioa_image, 0, 255,
-            cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)[1]
-        
-        boxes.extend(split_boxes(thresh))
-    # cv2.imshow('b', boxes[1])
-    # cv2.waitKey(0)
-    # cv2.imshow('b', boxes[-1])
-    # cv2.waitKey(0)
+        with open('all_status.csv', 'w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(['image_name'] + list(range(1, len(correct_answers)+1 )))
 
-    return boxes
+            for file in os.listdir(test_dir_path):
+                
+                if not imghdr.what(f'{test_dir_path}/{file}'): ## is not an image
+                    continue
 
-def score(user_answers: list, correct_answers: list) -> float:
-    question_number = min(len(user_answers), len(correct_answers)) ## Check the same size
-    user_answers = user_answers[:question_number]
-    correct_answers = correct_answers[:question_number]
+                if 'kild' in file: 
+                    continue ## Pass the key
+                image = cv2.imread(f'{test_dir_path}/{file}')
+                cells = get_boxes(image)
+                user_answers = get_user_answers_by_image(cells)
+                data = [file]
+                for i, answer in enumerate(correct_answers):
+                    if user_answers[i] == const.UNANSWERED_CHOICE:
+                        data.append('-')
+                    elif user_answers[i] == answer:
+                        data.append('True')
+                    else:
+                        data.append('False')
 
-    tp = sum(1 for x, y in zip(user_answers, correct_answers) if x == y)
+                writer.writerow(data)
 
-    return tp / question_number * 100
+    @staticmethod
+    def save_all(test_dir_path, key_path):
+        key_image = cv2.imread(key_path)
 
+        correct_answers = get_correct_answers(key_image)
+        with open('all_score.csv', 'w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(['name', 'score'])
 
-def representation(user_answers, correct_answers, test_image):
-    question_number = min(len(user_answers), len(correct_answers))
-
-    image = test_image.copy()
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    inner_rectangles = get_boxes_contours(gray)
-
-    for qn in range(question_number):
-        box_number = qn // const.NUMBER_OF_QUESTION_IN_BOX
-        row_number = qn % const.NUMBER_OF_QUESTION_IN_BOX
-
-        x, y, _, _ = inner_rectangles[box_number]
-        
-        color = (0, 0, 255) if user_answers[qn] != correct_answers[qn] else (0, 255, 0) # red for wrong answers and green for correct
-        t_x, t_y = x + 50 + 40 * correct_answers[qn] , y + 20 + 29 * row_number 
-
-        cv2.ellipse(image, (t_x, t_y), (17,10), 0, 0 , 360, color, -1)
-
-    image = cv2.resize(image, (800, 800))
-    cv2.imshow("image", image)
-    cv2.waitKey(0)
-
-def is_tick_pattern(contour):
-    # Calculate the contour perimeter
-    perimeter = cv2.arcLength(contour, True)
-
-    # Approximate the contour shape with a polygon
-    epsilon = 0.02 * perimeter
-    approx = cv2.approxPolyDP(contour, epsilon, True)
-
-    # Check if the contour has 3 line segments and an angle close to 90 degrees
-    if len(approx) == 3:
-        angles = []
-        for i in range(3):
-            p1 = approx[i][0]
-            p2 = approx[(i + 1) % 3][0]
-            p3 = approx[(i + 2) % 3][0]
-            v1 = p1 - p2
-            v2 = p3 - p2
-            dot_product = v1.dot(v2)
-            angle = abs(np.arccos(dot_product / (np.linalg.norm(v1) * np.linalg.norm(v2))) * 180 / np.pi)
-            angles.append(angle)
-        avg_angle = sum(angles) / len(angles)
-        if abs(avg_angle - 90) < 10:
-            return True
-    
-    return False
-
-def get_correct_answers(key_image):
-    correct_answers = []
-    image = key_image.copy()
-    crop_height = 400  # Adjust the value based on your requirements
-
-    # Crop the top portion of the image
-    image = image[crop_height:, :, :]
-    key_image = key_image[crop_height:, :, :]
-
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-    lower_green = np.array([40, 40, 40])  # Example lower threshold for green (adjust as needed)
-    upper_green = np.array([70, 255, 255])  # Example upper threshold for green (adjust as needed)
-
-    # Create a mask of green regions
-    mask = cv2.inRange(hsv, lower_green, upper_green)
+            for file in os.listdir(test_dir_path):
+                if not imghdr.what(f'{test_dir_path}/{file}'): ## is not an image
+                    continue
+                if 'kild' in file: 
+                    continue ## Pass the key
+                _instance = ClassScore(f'{test_dir_path}/{file}', key_path)
+                cells = get_boxes(_instance.test_image)
+                user_answers = get_user_answers_by_image(cells)
+                
+                score = _instance.score(user_answers, correct_answers)
+                writer.writerow([file, score])
 
 
-    contours, hierarchy = cv2.findContours(mask, cv2.RETR_EXTERNAL,
-                                        cv2.CHAIN_APPROX_SIMPLE)
+if __name__ == '__main__':
+    test = ClassScore('data\ResponseLetter\image0000019A.tif', 'data\ResponseLetter\kild.png')
+    test.representation(test.test_image, test.key_image)
+    test.save_status()
 
-    # cv2.drawContours(key_image, contours, -1 , (255, 0, 0), 5)
-    contours = sorted(contours, key=lambda c: cv2.boundingRect(c)[1])
-
-
-    for contour in contours:
-        x, _, _ , _ = cv2.boundingRect(contour)
-        print(x)
-        if x < 400:
-            correct_answers.append(0)
-        elif x < 900:
-            correct_answers.append(1)
-        elif x < 1200:
-            correct_answers.append(2)
-        else:
-            correct_answers.append(3)
-    return correct_answers
-
-
-
-key_image = cv2.imread('data/ResponseLetter/kild.png')
-correct_answers = get_correct_answers(key_image)
-# Fix bug in image (Question 149 doesn't exists!)
-correct_answers = correct_answers[:148] + [1] + correct_answers[148:]
-
-for file in os.listdir('data/ResponseLetter/'):
-    if 'kild' in file:
-        continue
-
-    image = cv2.imread('data/ResponseLetter/'+file)
-    
-    cells = get_boxes(image)
-
-    user_answers = [const.UNANSWERED_CHOICE] * (len(cells) // const.NUMBER_OF_CHOICES)
-    question_number = -1
-    for i, cell in enumerate(cells):
-        if i % const.NUMBER_OF_CHOICES == 0:
-            question_number += 1
-        if is_checked(cell):
-            user_answers[question_number] = i % const.NUMBER_OF_CHOICES 
-        
-
-    user_score = score(user_answers, correct_answers)
-    # represe
-    # ntation(user_answers, correct_answers, image)
-    # break
+    ClassScore.save_all_status('data\ResponseLetter\\', 'data\ResponseLetter\kild.png')
+    ClassScore.save_all('data\ResponseLetter\\', 'data\ResponseLetter\kild.png')
