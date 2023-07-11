@@ -122,9 +122,9 @@ class ClassScore:
 
 
 if __name__ == '__main__':
-    test = ClassScore('data\ResponseLetter\image0000019A.tif', 'data\ResponseLetter\kild.png')
+    test = ClassScore('data\ResponseLetter\image0000050A.tif', 'data\ResponseLetter\kild.png')
     test.representation(test.test_image, test.key_image)
     test.save_status()
 
-    ClassScore.save_all_status('data\ResponseLetter\\', 'data\ResponseLetter\kild.png')
-    ClassScore.save_all('data\ResponseLetter\\', 'data\ResponseLetter\kild.png')
+    # ClassScore.save_all_status('data\ResponseLetter\\', 'data\ResponseLetter\kild.png')
+    # ClassScore.save_all('data\ResponseLetter\\', 'data\ResponseLetter\kild.png')
